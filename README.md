@@ -7,11 +7,16 @@
 Simple Python Script to notify Celery Worker Events running on Host, 
 *create mainly for legacy projects*
 
+*Note: This monitor will be capture all events of all queues running on host,
+if celery is rebooted monitor must be rebooted too after celery.*
+
 Simple Usage
 ---
 1. First Configure ELASTIC SERVER connection on [config.conf](/src/config.conf) file.
 2. Make sure celery worker is running.
-3. Run your monitor.  
+3. Run your monitor `$ python monitor.py`.  
 
 
 
+# TODO 
+* Include tests.
