@@ -1,11 +1,16 @@
 """ Simple and small Celery Monitor """
+from __future__ import absolute_import
+from __future__ import unicode_literals
+
+import os
+import re
 import time
-import json
 import logging
 import random
 
 from functools import wraps
-
+from datetime import datetime
+from configparser import ConfigParser
 
 import requests
 
@@ -20,38 +25,50 @@ from requests.exceptions import Timeout, ConnectionError
 from requests.auth import HTTPBasicAuth
 from requests.auth import _basic_auth_str
 
-
-from celery import current_app
+logging.basicConfig(
+    filename=u'elastic_celery_events.log',
+    format=u'{levelname} on {lineno}: {message}',
+    level=logging.INFO,
+)
 
 LOGGER = logging.getLogger(__name__)
 
-# ELASTIC_SEARCH_SERVER = 'http://127.0.0.1:9200'
-ELASTIC_SEARCH_SERVER = 'http://10.129.65.10:9200'
+try:
+    from celery import current_app
+except ImportError:
+    raise EnvironmentError(
+        u'Environment to monitor must be has celery installed.'
+    )
 
-ELASTIC_AUTH_API_ID = None
-ELASTIC_AUTH_API_KEY = None
-ELASTIC_AUTH_REQUIRED = False
+config_filepath = os.path.join(os.getcwd(), 'config.conf')
 
-PROXY = None
-ELASTIC_PROXY_REQUIRED = False
+config = ConfigParser()
+config.read_file(open(config_filepath, 'w'))
+ELASTIC_SEARCH_SERVER = config.get(section='ELASTIC_SERVER', option='ELASTIC_SEARCH_SERVER')
+ELASTIC_AUTH_API_ID = config.get(section='ELASTIC_SERVER', option='ELASTIC_AUTH_API_ID')
+ELASTIC_AUTH_API_KEY = config.get(section='ELASTIC_SERVER', option='ELASTIC_AUTH_API_KEY')
+ELASTIC_AUTH_REQUIRED = config.get(section='ELASTIC_SERVER', option='ELASTIC_AUTH_REQUIRED')
+PROXY = config.get(section='ELASTIC_SERVER', option='PROXY')
+ELASTIC_PROXY_REQUIRED = config.get(section='ELASTIC_SERVER', option='ELASTIC_PROXY_REQUIRED')
+
+if not re.search(r'^http(s)?://.+\..{2,}', ELASTIC_SEARCH_SERVER):
+    msg = 'ELASTIC_SEARCH_SERVER is not a http web service'
+    LOGGER.critical(msg=msg)
+    raise ValueError(msg)
 
 
-def is_json_serializable(object_, request=False):
+def is_json_serializable(object_):
     """
     Util to verify if object is json serializable,
     support requests object json serializer verification for requests lib (doesn't use json lib).
     Args:
         object_: A python object to analyze.
-        request: A boolean indicating if data will send on requests action [default: false].
 
     Returns:
         A boolean indicating if object is serializable or nor.
     """
     try:
-        if request:
-            complexjson.dumps(object_)
-        else:
-            json.dumps(object_)
+        complexjson.dumps(object_)
         return True
     except (TypeError, ValueError):
         return False
@@ -154,7 +171,7 @@ class ElasticManager(object):
         'https': 'https://' + PROXY,
         'ftp': 'ftp://' + PROXY
     } if ELASTIC_PROXY_REQUIRED else {}
-    # TODO Debate if change to token auth behavior
+
     __auth = ElasticApiAuth(
         username=ELASTIC_AUTH_API_ID,
         password=ELASTIC_AUTH_API_KEY,
@@ -197,7 +214,7 @@ class ElasticManager(object):
 
     def get_query_doc(self, query, **kwargs):
         """ Method to get documents from elastic by query """
-        if type(query) != dict or not is_json_serializable(query, request=True):
+        if type(query) != dict or not is_json_serializable(query):
             LOGGER.error(msg=u'`query` information is not json serializable no allowed to for perform elastic request.')
             return {}
 
@@ -216,7 +233,7 @@ class ElasticManager(object):
 
     def create_doc(self, data, doc_type=u'_doc', **kwargs):
         """ Method to create doc on """
-        if type(data) != dict or not is_json_serializable(data, request=True):
+        if type(data) != dict or not is_json_serializable(data):
             LOGGER.error(msg=u'`data` information is not json serializable no allowed to for perform elastic request.')
             return {}
 
@@ -237,7 +254,7 @@ class ElasticManager(object):
 
     def simple_doc_update(self, key, data, **kwargs):
         """ Simple update method for update document on Elastic using _update doc_type """
-        if type(data) != dict or not is_json_serializable(data, request=True):
+        if type(data) != dict or not is_json_serializable(data):
             LOGGER.error(msg=u'`data` information is not json serializable no allowed to for perform elastic request.')
             return {}
 
@@ -288,6 +305,9 @@ class ElasticManager(object):
 
 
 class Monitor(object):
+    """ Monitor object to manage celery events based on doc
+    ref: https://docs.celeryproject.org/en/3.1/userguide/monitoring.html#real-time-processing
+    """
     app = current_app
 
     def __init__(self):
@@ -297,7 +317,6 @@ class Monitor(object):
     @staticmethod
     def serialize_task(task):
         """ Simple method to serialize Task object """
-        from datetime import datetime
         return {
             'task_id': task.uuid,
             'task_name': task.name,
@@ -346,8 +365,9 @@ class Monitor(object):
                 data=self.serialize_task(task)
             )
 
-        print('TASK FAILED: %s[%s] %s' % (
-            task.name, task.uuid, task.info(),))
+        LOGGER.info(
+            msg='TASK FAILED: %s[%s] %s' % (task.name, task.uuid, task.info(),)
+        )
 
     def announce_received_tasks(self, event):
         self.state.event(event)
@@ -361,8 +381,9 @@ class Monitor(object):
                 data=self.serialize_task(task)
             )
 
-        print('TASK RECEIVED: %s[%s] %s' % (
-            task.name, task.uuid, task.info(),))
+        LOGGER.info(
+            msg='TASK RECEIVED: %s[%s] %s' % (task.name, task.uuid, task.info(),)
+        )
 
     def announce_sent_tasks(self, event):
         self.state.event(event)
@@ -376,8 +397,9 @@ class Monitor(object):
                 data=self.serialize_task(task)
             )
 
-        print('TASK SEND: %s[%s] %s' % (
-            task.name, task.uuid, task.info(),))
+        LOGGER.info(
+            msg='TASK SEND: %s[%s] %s' % (task.name, task.uuid, task.info(),)
+        )
 
     def announce_started_tasks(self, event):
         self.state.event(event)
@@ -391,8 +413,9 @@ class Monitor(object):
                 data=self.serialize_task(task)
             )
 
-        print('TASK STARTED: %s[%s] %s' % (
-            task.name, task.uuid, task.info(),))
+        LOGGER.info(
+            msg='TASK STARTED: %s[%s] %s' % (task.name, task.uuid, task.info(),)
+        )
 
     def announce_succeded_tasks(self, event):
         self.state.event(event)
@@ -406,8 +429,9 @@ class Monitor(object):
                 data=self.serialize_task(task)
             )
 
-        print('TASK SUCCEDED: %s[%s] %s' % (
-            task.name, task.uuid, task.info(),))
+        LOGGER.info(
+            msg='TASK SUCCEDED: %s[%s] %s' % (task.name, task.uuid, task.info(),)
+        )
 
     def announce_rejected_tasks(self, event):
         self.state.event(event)
@@ -421,8 +445,9 @@ class Monitor(object):
                 data=self.serialize_task(task)
             )
 
-        print('TASK REJECTED: %s[%s] %s' % (
-            task.name, task.uuid, task.info(),))
+        LOGGER.info(
+            msg='TASK REJECTED: %s[%s] %s' % (task.name, task.uuid, task.info(),)
+        )
 
     def announce_revoked_tasks(self, event):
         self.state.event(event)
@@ -436,8 +461,9 @@ class Monitor(object):
                 data=self.serialize_task(task)
             )
 
-        print('TASK REVOKED: %s[%s] %s' % (
-            task.name, task.uuid, task.info(),))
+        LOGGER.info(
+            msg='TASK REVOKED: %s[%s] %s' % (task.name, task.uuid, task.info(),)
+        )
 
     def announce_retried_tasks(self, event):
         self.state.event(event)
@@ -451,18 +477,18 @@ class Monitor(object):
                 data=self.serialize_task(task)
             )
 
-        print('TASK RETRIED: %s[%s] %s' % (
-            task.name, task.uuid, task.info(),))
+        LOGGER.info(
+            msg='TASK RETRIED: %s[%s] %s' % (task.name, task.uuid, task.info(),)
+        )
 
     def worker_disconnect(self, event):
-        print "WORKER DISCONNECT", event
+        """ Worker disconnect event handler """
 
     def woker_heartbeat(self, event):
-        """ """
-        # print "WORKER HEARTBEAT", event
+        """ Worker heartbeat event handler """
 
     def worker_online(self, event):
-        print "WORKER ONLINE", event
+        """ Worker online event handler """
 
     def __start_monitoring(self):
         with self.app.connection() as connection:
