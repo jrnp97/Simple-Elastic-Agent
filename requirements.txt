@@ -1,0 +1,2 @@
+# celery==3.1.0  environment used to run script must be already has celery
+requests==2.13.0
